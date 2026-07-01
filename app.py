@@ -1,117 +1,166 @@
-import streamlit as st
+import gradio as gr
 import numpy as np
-import pickle
+import joblib
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
-# ---------------- CONFIG ----------------
-st.set_page_config(
-    page_title="CardioCare AI",
-    page_icon="🫀",
-    layout="wide"
-)
+# ================= LOAD MODEL =================
+model = joblib.load("model.pkl")
 
-# ---------------- LOAD MODEL ----------------
-model = pickle.load(open("model.pkl", "rb"))
-scaler = pickle.load(open("scaler.pkl", "rb"))
 
-# ---------------- HEADER ----------------
-st.title("🫀 CardioCare AI - Heart Risk Prediction Dashboard")
-st.caption("AI Clinical Decision Support System (Educational Use Only)")
-st.markdown("---")
-
-# ---------------- INPUT ----------------
-st.sidebar.header("Patient Clinical Data")
-
-age = st.sidebar.number_input("Age", 1, 120, 50)
-
-sex = st.sidebar.selectbox("Sex", ["Female", "Male"])
-sex = 1 if sex == "Male" else 0
-
-cp = st.sidebar.selectbox("Chest Pain Type (0-3)", [0, 1, 2, 3])
-
-trestbps = st.sidebar.number_input("Resting Blood Pressure", 80, 200, 120)
-
-chol = st.sidebar.number_input("Cholesterol", 100, 400, 200)
-
-fbs = st.sidebar.selectbox("Fasting Blood Sugar >120", ["No", "Yes"])
-fbs = 1 if fbs == "Yes" else 0
-
-restecg = st.sidebar.selectbox("Rest ECG", [0, 1, 2])
-
-thalach = st.sidebar.number_input("Max Heart Rate", 60, 220, 150)
-
-exang = st.sidebar.selectbox("Exercise Angina", ["No", "Yes"])
-exang = 1 if exang == "Yes" else 0
-
-oldpeak = st.sidebar.number_input("Oldpeak", 0.0, 6.0, 1.0)
-
-slope = st.sidebar.selectbox("Slope", [0, 1, 2])
-
-ca = st.sidebar.selectbox("Major Vessels (0-3)", [0, 1, 2, 3])
-
-thal = st.sidebar.selectbox("Thal", [0, 1, 2, 3])
-
-# ---------------- INPUT ARRAY ----------------
-input_data = np.array([[
-    age, sex, cp, trestbps, chol, fbs,
-    restecg, thalach, exang, oldpeak,
-    slope, ca, thal
-]])
-
-# ---------------- PREDICTION ----------------
-if st.button("🔍 Generate Report"):
-
-    # scale input
-    input_scaled = scaler.transform(input_data)
-
-    # predict
-    pred = model.predict(input_scaled)[0]
-    proba = model.predict_proba(input_scaled)[0]
-
-    # ---------------- SAFE CLASS HANDLING ----------------
-    classes = list(model.classes_)
-
-    # find index for HIGH risk class (1)
-    if 1 in classes:
-        high_index = classes.index(1)
-        low_index = classes.index(0)
+# ================= HEALTH STATUS =================
+def health_plan(risk):
+    if risk >= 70:
+        return "🔴 HIGH RISK", "#DC2626"
+    elif risk >= 30:
+        return "🟠 MODERATE RISK", "#F59E0B"
     else:
-        high_index = 1
-        low_index = 0
+        return "🟢 LOW RISK", "#22C55E"
 
-    high_risk = proba[high_index]
-    low_risk = proba[low_index]
 
-    risk_score = high_risk
+# ================= PDF GENERATION =================
+def create_pdf(content_text):
+    file_path = "/tmp/heart_report.pdf"
+    doc = SimpleDocTemplate(file_path)
+    styles = getSampleStyleSheet()
 
-    # ---------------- DECISION LOGIC ----------------
-    if risk_score >= 0.65:
-        label = "🔴 HIGH CARDIAC RISK"
-        st.error(label)
+    content = []
+    for line in content_text.split("\n"):
+        content.append(Paragraph(line, styles["Normal"]))
+        content.append(Spacer(1, 5))
 
-    elif risk_score >= 0.35:
-        label = "🟡 MODERATE CARDIAC RISK"
-        st.warning(label)
+    doc.build(content)
+    return file_path
 
-    else:
-        label = "🟢 LOW CARDIAC RISK"
-        st.success(label)
 
-    # ---------------- DISPLAY ----------------
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Age", age)
-    col2.metric("Heart Rate", thalach)
-    col3.metric("Cholesterol", chol)
+# ================= PREDICT FUNCTION =================
+def predict(name, pid, age, sex,
+            cp, trestbps, chol, fbs,
+            restecg, thalach, exang,
+            oldpeak, slope, ca, thal):
 
-    st.markdown("---")
+    sex_val = 1 if sex == "Male" else 0
 
-    st.subheader("📊 AI Risk Analysis")
+    data = np.array([[age, sex_val, cp, trestbps, chol, fbs,
+                      restecg, thalach, exang, oldpeak,
+                      slope, ca, thal]])
 
-    st.write(f"**Final Prediction:** {label}")
-    st.write(f"**High Risk Probability:** {high_risk*100:.2f}%")
-    st.write(f"**Low Risk Probability:** {low_risk*100:.2f}%")
+    prob = model.predict_proba(data)[0][1]
+    risk = float(prob * 100)
 
-    st.progress(int(risk_score * 100))
+    status, color = health_plan(risk)
 
-# ---------------- FOOTER ----------------
-st.markdown("---")
-st.caption("⚠ Educational AI system only - Not a medical diagnosis")
+    # ================= HTML OUTPUT =================
+    html = f"""
+    <div style="
+        background:white;
+        padding:25px;
+        border-radius:20px;
+        border-left:10px solid {color};
+        box-shadow:0 10px 25px rgba(0,0,0,0.12);
+        font-family:Arial;
+    ">
+    <h2 style="color:{color};">{status}</h2>
+    <h3>📊 Risk Score: {risk:.2f}%</h3>
+    <hr>
+    <h3>👤 Patient Details</h3>
+    <p><b>Name:</b> {name}</p>
+    <p><b>ID:</b> {pid}</p>
+    <p><b>Age:</b> {age}</p>
+    <p><b>Gender:</b> {sex}</p>
+    <hr>
+    <h3>🥗 Health Advice</h3>
+    <p>Vegetables, Fruits, Nuts, Fish<br>
+    Avoid fried food, sugar, processed food</p>
+    <h3>🏃 Exercise</h3>
+    <p>Walking 30–40 min/day, Yoga, Cycling</p>
+    <h3>😴 Sleep</h3>
+    <p>7–8 hours daily</p>
+    <h3>⚠ Medical Advice</h3>
+    <p>Consult doctor if symptoms persist</p>
+    </div>
+    """
+
+    # ================= PDF CONTENT =================
+    pdf_text = f"""
+HEART ATTACK RISK REPORT
+PATIENT DETAILS
+Name: {name}
+ID: {pid}
+Age: {age}
+Gender: {sex}
+RESULT
+Status: {status}
+Risk Score: {risk:.2f}%
+RECOMMENDATIONS
+- Eat healthy diet
+- Exercise daily (30-40 min)
+- Sleep 7-8 hours
+- Avoid junk food
+NOTE: AI generated report
+"""
+
+    pdf_path = create_pdf(pdf_text)
+
+    return html, pdf_path
+
+
+# ================= UI =================
+with gr.Blocks(
+    theme=gr.themes.Soft(primary_hue="blue", secondary_hue="cyan")
+) as app:
+
+    gr.Markdown("""
+    # 🫀 Heart Attack Prediction AI  
+    ### Professional Medical Risk Dashboard
+    """)
+
+    # -------- PATIENT DETAILS --------
+    gr.Markdown("## 👤 Patient Details")
+
+    with gr.Row():
+        name = gr.Textbox(label="Patient Name")
+        pid = gr.Textbox(label="Patient ID")
+        age = gr.Number(label="Age", value=30)
+
+    sex = gr.Dropdown(["Male", "Female"], label="Gender")
+
+    # -------- MEDICAL INPUTS --------
+    gr.Markdown("## ❤️ Medical Parameters")
+
+    with gr.Row():
+        cp = gr.Number(label="Chest Pain (0-3)", value=1)
+        trestbps = gr.Number(label="BP", value=120)
+        chol = gr.Number(label="Cholesterol", value=200)
+
+    with gr.Row():
+        fbs = gr.Number(label="Sugar (0/1)", value=0)
+        restecg = gr.Number(label="ECG (0-2)", value=1)
+        thalach = gr.Number(label="Max Heart Rate", value=150)
+
+    with gr.Row():
+        exang = gr.Number(label="Angina (0/1)", value=0)
+        oldpeak = gr.Number(label="Oldpeak", value=1.0)
+        slope = gr.Number(label="Slope (0-2)", value=1)
+
+    with gr.Row():
+        ca = gr.Number(label="Vessels (0-3)", value=0)
+        thal = gr.Number(label="Thal (0-3)", value=2)
+
+    # -------- BUTTON --------
+    btn = gr.Button("🔍 Analyze Risk", variant="primary")
+
+    output_html = gr.HTML()
+    output_pdf = gr.File(label="📄 Download Medical Report")
+
+    # -------- FUNCTION CALL --------
+    btn.click(
+        predict,
+        inputs=[name, pid, age, sex,
+                cp, trestbps, chol, fbs,
+                restecg, thalach, exang,
+                oldpeak, slope, ca, thal],
+        outputs=[output_html, output_pdf]
+    )
+
+app.launch()
